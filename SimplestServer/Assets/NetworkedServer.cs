@@ -16,13 +16,20 @@ public class NetworkedServer : MonoBehaviour
 
     LinkedList<PlayerAccount> playerAccounts;
 
+    [SerializeField]
+    List<connectionIDprofile> IDprofiles = new List<connectionIDprofile>();
+    //connectionIDprofile[] IDprofiles;
+    [SerializeField]
+    connectionIDprofile structTest = new connectionIDprofile();
+
+    LinkedList<GameRoom> gameRooms;
+
     const int PlayerAccountRecord = 1;
 
     string PlayerAccountFilePath;
 
     int playerWaitingForMatchID = -1;
 
-    LinkedList<GameRoom> gameRooms;
 
     // Start is called before the first frame update
     void Start()
@@ -45,6 +52,9 @@ public class NetworkedServer : MonoBehaviour
         }
 
         gameRooms = new LinkedList<GameRoom>();
+
+        //IDprofiles = new connectionIDprofile[1];
+        //IDprofiles = new List<connectionIDprofile>();
     }
 
     // Update is called once per frame
@@ -119,9 +129,13 @@ public class NetworkedServer : MonoBehaviour
 
                 playerAccounts.AddLast(newPlayerAccount);
                 SendMessageToClient(ServertoClientSignifiers.CreateAccountSuccess + ", Created Account", id);
+                // save list to HD
                 SavePlayerAccounts();
                 Debug.Log("Created Account");
-                // save list to HD
+                // stores ID the player connects from
+                newPlayerAccount.connectionID = id;
+                connectionIDprofile IDprofile = new connectionIDprofile(id, newPlayerAccount.name);
+                IDprofiles.Add(IDprofile);
             }
             // if not, create new account, add to list and save list to HD
             // send to client success/failure
@@ -142,6 +156,11 @@ public class NetworkedServer : MonoBehaviour
                     {
                         SendMessageToClient(ServertoClientSignifiers.LoginAccountSuccess + ",Login Account", id);
                         Debug.Log("Login Account");
+                        // Stores the id the user connects from
+                        pa.connectionID = id;
+                        connectionIDprofile IDprofile = new connectionIDprofile(id, pa.name);
+                        IDprofiles.Add(IDprofile);
+                        Debug.Log(IDprofiles.Count);
                     }
                     else
                     {
@@ -192,7 +211,59 @@ public class NetworkedServer : MonoBehaviour
                 }
             }
             // get the game room that the client ID is in
-            
+
+        }
+        else if (signifier == ClientToServerSignifiers.ChatBoxMessageSend)
+        {
+            Debug.Log("Processing message");
+            GameRoom gr = GetGameRoomWithClientID(id);
+            string message = csv[1];
+
+            if (gr != null)
+            {
+                string username = "Unknown";
+                Debug.Log("Checking to see if id exists");
+                foreach(connectionIDprofile ID in IDprofiles)
+                {
+                    if(ID.connectionID == id)
+                    {
+                        username = ID.profileName;
+                    }
+                }
+                string msgList = ServertoClientSignifiers.chatBoxMessageReceive + "," + username + ": " + message 
+                    + "," + ServertoClientSignifiers.chatReceivedTypePlayer;
+                if (gr.playerID1 == id)
+                {
+                    SendMessageToClient(msgList, gr.playerID2);
+
+                    SendtoAllObservers(gr, username, id, message, ServertoClientSignifiers.chatReceivedTypePlayer);
+                }
+                else if (gr.playerID2 == id)
+                {
+                    SendMessageToClient(msgList, gr.playerID1);
+
+                    SendtoAllObservers(gr, username, id, message, ServertoClientSignifiers.chatReceivedTypePlayer);
+                }
+                else
+                {
+                    Debug.Log(username + " sent something");
+                    msgList = ServertoClientSignifiers.chatBoxMessageReceive + "," + username + ": " + message 
+                        + "," + ServertoClientSignifiers.chatReceivedTypeObserver;
+                    SendMessageToClient(msgList, gr.playerID1);
+                    SendMessageToClient(msgList, gr.playerID2);
+
+                    SendtoAllObservers(gr, username, id, message, ServertoClientSignifiers.chatReceivedTypeObserver);
+                }
+            }
+        }
+        else if (signifier == ClientToServerSignifiers.JoinAsObserver)
+        {
+            if(gameRooms != null)
+            {
+                // Only joins the first gameroom as observer
+                gameRooms.First.Value.observers.Add(id);
+                SendMessageToClient(ServertoClientSignifiers.ObserverJoined + ",you are observing", id);
+            }
         }
     }
 
@@ -235,21 +306,53 @@ public class NetworkedServer : MonoBehaviour
 
     private GameRoom GetGameRoomWithClientID(int id)
     {
+        // checks through list of game room instances
         foreach(GameRoom gr in gameRooms)
         {
+            // check if ID comes from either of the players
             if(gr.playerID1 == id || gr.playerID2 == id)
             {
+                // returns the gameroom instance they are in
                 return gr;
+            }
+            // if ID belongs to none of the players
+            else
+            {
+                // check ID of all observers in the room
+                foreach(int observer in gr.observers)
+                {
+                    // if observer in the room has same ID
+                    if(observer == id)
+                    {
+                        // returns the gameroom instance they are in
+                        return gr;
+                    }
+                }
             }
         }
         return null;
+    }
+
+    private void SendtoAllObservers(GameRoom whichGameRoom, string nameOfSender, int senderID, string message,
+        int msgType = ServertoClientSignifiers.chatReceivedTypeServer)
+    {
+        foreach (int ID in whichGameRoom.observers)
+        {
+            // sends to all observers except id of sender (incase sender is an observer)
+            if (ID != senderID)
+            {
+                string msgList = ServertoClientSignifiers.chatBoxMessageReceive + "," + nameOfSender + ": " + message 
+                    + "," + msgType;
+                SendMessageToClient(msgList, ID);
+            }
+        }
     }
 }
 
 public class PlayerAccount
 {
     public string name, password;
-
+    public int connectionID;
     public PlayerAccount(string Name, string Password)
     {
         name = Name;
@@ -257,14 +360,29 @@ public class PlayerAccount
     }
 }
 
+[System.Serializable]
+public struct connectionIDprofile
+{
+    public int connectionID;
+    public string profileName;
+
+    public connectionIDprofile(int id, string ProfileName)
+    {
+        profileName = ProfileName;
+        connectionID = id;
+    }
+}
+
 public class GameRoom
 {
     public int playerID1, playerID2;
+    public List<int> observers;
 
     public GameRoom(int PlayerID1, int PlayerID2)
     {
         playerID1 = PlayerID1;
         playerID2 = PlayerID2;
+        observers = new List<int>();
     }
 }
 
@@ -274,6 +392,8 @@ public static class ClientToServerSignifiers
     public const int LoginAccount = 2;
     public const int JoinQueueForGameRoom = 3;
     public const int TicTacToeShapeSelectPlay = 4;
+    public const int ChatBoxMessageSend = 5;
+    public const int JoinAsObserver = 6;
 }
 
 static public class ServertoClientSignifiers
@@ -286,4 +406,10 @@ static public class ServertoClientSignifiers
 
     public const int OpponentPlay = 5;
     public const int GameStart = 6;
+    public const int chatBoxMessageReceive = 7;
+
+    public const int ObserverJoined = 8;
+    public const int chatReceivedTypePlayer = 9;
+    public const int chatReceivedTypeObserver = 10;
+    public const int chatReceivedTypeServer = 11;
 }
